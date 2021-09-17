@@ -3,13 +3,12 @@ Author and collaborators
 
 Student
 -------
-(Your name.)
+Chao Cheng
 
 
 Collaborators
 -------------
-(List any other collaborators and describe help you got from other students
-in the class.)
+Wendy Qiu
 
 
 Citations
