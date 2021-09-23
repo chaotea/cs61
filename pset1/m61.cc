@@ -1,5 +1,5 @@
 #define M61_DISABLE 1
-#define METADATA_LIMIT 20000000
+#define BOUND_FREES 8
 #define MAGIC_NUMBER 42
 #include "m61.hh"
 #include <cstdlib>
@@ -40,7 +40,7 @@ struct metadata {
 
 unordered_map<uintptr_t, metadata> allocated_pointers;
 unordered_map<string, size_t> heavy_hitters;
-queue<uintptr_t> allocated_pointers_q;
+queue<uintptr_t> frees;
 
 
 /// m61_malloc(sz, file, line)
@@ -77,11 +77,6 @@ void* m61_malloc(size_t sz, const char* file, long line) {
     // Update stats
     metadata m(sz, file, line, true);
     allocated_pointers[(uintptr_t) ptr] = m;
-    allocated_pointers_q.push((uintptr_t) ptr);
-    while (allocated_pointers_q.size() >= METADATA_LIMIT) {
-        allocated_pointers.erase(allocated_pointers_q.front());
-        allocated_pointers_q.pop();
-    }
     _stats.nactive++;
     _stats.ntotal++;
     _stats.total_size += sz;
@@ -147,6 +142,12 @@ void m61_free(void* ptr, const char* file, long line) {
             }
         }
         fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not in heap\n", file, line, ptr);
+    }
+
+    frees.push((uintptr_t) ptr);
+    if (frees.size() > BOUND_FREES && !allocated_pointers[frees.front()].active) {
+        allocated_pointers.erase(frees.front());
+        frees.pop();
     }
 }
 
