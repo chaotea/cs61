@@ -40,7 +40,7 @@ struct metadata {
 
 unordered_map<uintptr_t, metadata> allocated_pointers;
 unordered_map<string, size_t> heavy_hitters;
-queue<uintptr_t> frees;
+// queue<uintptr_t> frees;
 
 
 /// m61_malloc(sz, file, line)
@@ -144,11 +144,11 @@ void m61_free(void* ptr, const char* file, long line) {
         fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not in heap\n", file, line, ptr);
     }
 
-    frees.push((uintptr_t) ptr);
-    if (frees.size() > BOUND_FREES && !allocated_pointers[frees.front()].active) {
-        allocated_pointers.erase(frees.front());
-        frees.pop();
-    }
+    // frees.push((uintptr_t) ptr);
+    // if (frees.size() > BOUND_FREES && !allocated_pointers[frees.front()].active) {
+    //     allocated_pointers.erase(frees.front());
+    //     frees.pop();
+    // }
 }
 
 
