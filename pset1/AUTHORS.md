@@ -8,7 +8,8 @@ Chao Cheng
 
 Collaborators
 -------------
-Wendy Qiu
+- Cassie Wang
+- Wendy Qiu
 
 
 Citations

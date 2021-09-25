@@ -10,7 +10,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <queue>
+#include <list>
 #include <unordered_map>
 #include <algorithm>
 #include <random>
@@ -41,8 +41,8 @@ struct metadata {
 struct m61_statistics _stats {0, 0, 0, 0, 0, 0, 0, 0};
 unordered_map<uintptr_t, metadata> metadata_map;
 unordered_map<string, size_t> heavy_hitters;
+list<uintptr_t> frees;
 size_t hh_size = 0;
-// queue<uintptr_t> frees;
 
 
 /// m61_malloc(sz, file, line)
@@ -115,43 +115,49 @@ void m61_free(void* ptr, const char* file, long line) {
         return;
     }
 
-    // Check if pointer exists in metadata_map metadata
-    if (metadata_map.find((uintptr_t) ptr) != metadata_map.end()) {
-        // Check if double free
-        if (!metadata_map[(uintptr_t) ptr].active) {
-            fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
-        }
-
-        // Check if boundary write error
-        char* bound = (char*) ((uintptr_t)ptr + metadata_map[(uintptr_t) ptr].size);
-        if (*bound != MAGIC_NUMBER) {
-            fprintf(stderr, "MEMORY BUG: %s:%ld: detected wild write during free of pointer %p\n", file, line, ptr);
-            abort();
-        }
-        
-        // Free
-        base_free(ptr);
-
-        // Update stats
-        --_stats.nactive;
-        _stats.active_size -= metadata_map[(uintptr_t) ptr].size;
-        metadata_map[(uintptr_t) ptr].active = false;
-    } else {
-        for (auto it = metadata_map.begin(); it != metadata_map.end(); it++) {
-            if ((uintptr_t) ptr > it->first && (uintptr_t) ptr <= it->first + it->second.size) {
-                fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
-                fprintf(stderr, "\t%s:%ld: %p is %ld bytes inside a %ld byte region allocated here\n", file, it->second.line, ptr, (uintptr_t) ptr - it->first, it->second.size);
-                return;
-            }
-        }
+    // Check if invalid free because pointer doesn't exist in metadata_map 
+    if (metadata_map.count((uintptr_t) ptr) == 0) {
         fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not in heap\n", file, line, ptr);
+        abort();
     }
 
+    // Check if pointer points to invalid region
+    for (auto it = metadata_map.begin(); it != metadata_map.end(); it++) {
+        if (it->second.active && (uintptr_t) ptr > it->first && (uintptr_t) ptr <= it->first + it->second.size) {
+            fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
+            fprintf(stderr, "\t%s:%ld: %p is %ld bytes inside a %ld byte region allocated here\n", file, it->second.line, ptr, (uintptr_t) ptr - it->first, it->second.size);
+            abort();
+        }
+    }
+
+    // Check if double free
+    if (!metadata_map[(uintptr_t) ptr].active) {
+        fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
+        abort();
+    }
+
+    // Check if boundary write error
+    char* bound = (char*) ((uintptr_t)ptr + metadata_map[(uintptr_t) ptr].size);
+    if (*bound != MAGIC_NUMBER) {
+        fprintf(stderr, "MEMORY BUG: %s:%ld: detected wild write during free of pointer %p\n", file, line, ptr);
+        abort();
+    }
+    
+    // Free
+    base_free(ptr);
+
+    // Update stats
+    --_stats.nactive;
+    _stats.active_size -= metadata_map[(uintptr_t) ptr].size;
+    metadata_map[(uintptr_t) ptr].active = false;
+
+    // Bound the metadata
     // frees.push((uintptr_t) ptr);
-    // if (frees.size() > BOUND_FREES && !metadata_map[frees.front()].active) {
-    //     metadata_map.erase(frees.front());
-    //     frees.pop();
-    // }
+    if (frees.size() > BOUND_FREES) {
+        metadata_map.erase(frees.front());
+        frees.pop_front();
+    }
+    frees.push_back((uintptr_t) ptr);
 }
 
 
