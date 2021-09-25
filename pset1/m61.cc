@@ -22,18 +22,15 @@ struct metadata {
     size_t size;
     const char* file;
     long line;
-    bool active;
     metadata() {
         size = 0;
         file = nullptr;
         line = 0;
-        active = true;
     }
-    metadata(size_t _size, const char* _file, long _line, bool _active) {
+    metadata(size_t _size, const char* _file, long _line) {
         this->size = _size;
         this->file = _file;
         this->line = _line;
-        this->active = _active;
     }
 };
 
@@ -76,7 +73,7 @@ void* m61_malloc(size_t sz, const char* file, long line) {
     *bound = MAGIC_NUMBER;
 
     // Update stats
-    metadata m(sz, file, line, true);
+    metadata m(sz, file, line);
     metadata_map[(uintptr_t) ptr] = m;
     _stats.nactive++;
     _stats.ntotal++;
@@ -115,15 +112,22 @@ void m61_free(void* ptr, const char* file, long line) {
         return;
     }
 
-    // Check if invalid free because pointer doesn't exist in metadata_map 
-    if (metadata_map.count((uintptr_t) ptr) == 0) {
+    // Check if not in heap
+    if ((uintptr_t) ptr < _stats.heap_min || (uintptr_t) ptr > _stats.heap_max) {
         fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not in heap\n", file, line, ptr);
         abort();
     }
 
+    // Check if pointer not allocated (it doesn't exist in metadata)
+    // if (metadata_map.find((uintptr_t) ptr) == metadata_map.end()) {
+    //     fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
+    //     cout << "trig\n";
+    //     abort();
+    // }
+
     // Check if pointer points to invalid region
     for (auto it = metadata_map.begin(); it != metadata_map.end(); it++) {
-        if (it->second.active && (uintptr_t) ptr > it->first && (uintptr_t) ptr <= it->first + it->second.size) {
+        if (it->second.size != 0 && (uintptr_t) ptr > it->first && (uintptr_t) ptr <= it->first + it->second.size) {
             fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
             fprintf(stderr, "\t%s:%ld: %p is %ld bytes inside a %ld byte region allocated here\n", file, it->second.line, ptr, (uintptr_t) ptr - it->first, it->second.size);
             abort();
@@ -131,7 +135,7 @@ void m61_free(void* ptr, const char* file, long line) {
     }
 
     // Check if double free
-    if (!metadata_map[(uintptr_t) ptr].active) {
+    if (metadata_map[(uintptr_t) ptr].size == 0) {
         fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
         abort();
     }
@@ -149,15 +153,15 @@ void m61_free(void* ptr, const char* file, long line) {
     // Update stats
     --_stats.nactive;
     _stats.active_size -= metadata_map[(uintptr_t) ptr].size;
-    metadata_map[(uintptr_t) ptr].active = false;
+    metadata_map[(uintptr_t) ptr].size = 0;
 
     // Bound the metadata
-    // frees.push((uintptr_t) ptr);
-    if (frees.size() > BOUND_FREES) {
-        metadata_map.erase(frees.front());
-        frees.pop_front();
-    }
-    frees.push_back((uintptr_t) ptr);
+    // if (frees.size() > BOUND_FREES && metadata_map[frees.front()].size != 0) {
+    // if (frees.size() > BOUND_FREES) {
+    //     metadata_map.erase(frees.front());
+    //     frees.pop_front();
+    //     frees.push_back((uintptr_t) ptr);
+    // }
 }
 
 
@@ -210,7 +214,7 @@ void m61_print_statistics() {
 
 void m61_print_leak_report() {
     for (auto it = metadata_map.begin(); it != metadata_map.end(); it++) {
-        if (it->second.active) {
+        if (it->second.size != 0) {
             printf("LEAK CHECK: %s:%ld: allocated object %p with size %lu\n", it->second.file, it->second.line, (void*) it->first, it->second.size);
         }
     }
