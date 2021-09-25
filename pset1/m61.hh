@@ -22,6 +22,15 @@ void m61_free(void* ptr, const char* file, long line);
 ///    should be initialized to zero.
 void* m61_calloc(size_t nmemb, size_t sz, const char* file, long line);
 
+/// m61_realloc(ptr, sz, file, line)
+///    Reallocate the dynamic memory pointed to by `ptr` to hold at least
+///    `sz` bytes, returning a pointer to the new block. If `ptr` is
+///    `nullptr`, behaves like `m61_malloc(sz, file, line)`. If `sz` is 0,
+///    behaves like `m61_free(ptr, file, line)`. The allocation request
+///    was at location `file`:`line`.
+
+void* m61_realloc(void* ptr, size_t sz, const char* file, long line);
+
 
 /// m61_statistics
 ///    Structure tracking memory statistics.

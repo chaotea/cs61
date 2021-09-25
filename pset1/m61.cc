@@ -112,56 +112,56 @@ void m61_free(void* ptr, const char* file, long line) {
         return;
     }
 
-    // Check if not in heap
-    if ((uintptr_t) ptr < _stats.heap_min || (uintptr_t) ptr > _stats.heap_max) {
-        fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not in heap\n", file, line, ptr);
-        abort();
-    }
+    // Check if pointer exists in metadata_map metadata
+    if (metadata_map.find((uintptr_t) ptr) != metadata_map.end()) {
 
-    // Check if pointer not allocated (it doesn't exist in metadata)
-    // if (metadata_map.find((uintptr_t) ptr) == metadata_map.end()) {
-    //     fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
-    //     cout << "trig\n";
-    //     abort();
-    // }
-
-    // Check if pointer points to invalid region
-    for (auto it = metadata_map.begin(); it != metadata_map.end(); it++) {
-        if (it->second.size != 0 && (uintptr_t) ptr > it->first && (uintptr_t) ptr <= it->first + it->second.size) {
-            fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
-            fprintf(stderr, "\t%s:%ld: %p is %ld bytes inside a %ld byte region allocated here\n", file, it->second.line, ptr, (uintptr_t) ptr - it->first, it->second.size);
+        // Check if double free
+        if (metadata_map[(uintptr_t) ptr].size == 0) {
+            fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
             abort();
         }
-    }
 
-    // Check if double free
-    if (metadata_map[(uintptr_t) ptr].size == 0) {
-        fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, double free\n", file, line, ptr);
+        // Check if boundary write error
+        char* bound = (char*) ((uintptr_t)ptr + metadata_map[(uintptr_t) ptr].size);
+        if (*bound != MAGIC_NUMBER) {
+            fprintf(stderr, "MEMORY BUG: %s:%ld: detected wild write during free of pointer %p\n", file, line, ptr);
+            abort();
+        }
+        
+        // Free
+        base_free(ptr);
+
+        // Update stats
+        --_stats.nactive;
+        _stats.active_size -= metadata_map[(uintptr_t) ptr].size;
+        metadata_map[(uintptr_t) ptr].size = 0;
+    } else {
+
+	    // Check if not in heap
+        if ((uintptr_t) ptr < _stats.heap_min || (uintptr_t) ptr > _stats.heap_max) {
+            fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not in heap\n", file, line, ptr);
+            abort();
+        }
+
+	    // Check if pointer points to invalid region
+        for (auto it = metadata_map.begin(); it != metadata_map.end(); it++) {
+            if ((uintptr_t) ptr > it->first && (uintptr_t) ptr <= it->first + it->second.size) {
+                fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
+                fprintf(stderr, "\t%s:%ld: %p is %ld bytes inside a %ld byte region allocated here\n", file, it->second.line, ptr, (uintptr_t) ptr - it->first, it->second.size);
+                abort();
+            }
+        }
+
+	    // Pointer not allocated (it doesn't exist in metadata)
+        fprintf(stderr, "MEMORY BUG: %s:%ld: invalid free of pointer %p, not allocated\n", file, line, ptr);
         abort();
     }
 
-    // Check if boundary write error
-    char* bound = (char*) ((uintptr_t)ptr + metadata_map[(uintptr_t) ptr].size);
-    if (*bound != MAGIC_NUMBER) {
-        fprintf(stderr, "MEMORY BUG: %s:%ld: detected wild write during free of pointer %p\n", file, line, ptr);
-        abort();
+    if (frees.size() > BOUND_FREES) {
+        metadata_map.erase(frees.front());
+        frees.pop_front();
+        frees.push_back((uintptr_t) ptr);
     }
-    
-    // Free
-    base_free(ptr);
-
-    // Update stats
-    --_stats.nactive;
-    _stats.active_size -= metadata_map[(uintptr_t) ptr].size;
-    metadata_map[(uintptr_t) ptr].size = 0;
-
-    // Bound the metadata
-    // if (frees.size() > BOUND_FREES && metadata_map[frees.front()].size != 0) {
-    // if (frees.size() > BOUND_FREES) {
-    //     metadata_map.erase(frees.front());
-    //     frees.pop_front();
-    //     frees.push_back((uintptr_t) ptr);
-    // }
 }
 
 
@@ -183,6 +183,35 @@ void* m61_calloc(size_t nmemb, size_t sz, const char* file, long line) {
         memset(ptr, 0, nmemb * sz);
     }
     return ptr;
+}
+
+/// m61_realloc(ptr, sz, file, line)
+///    Reallocate the dynamic memory pointed to by `ptr` to hold at least
+///    `sz` bytes, returning a pointer to the new block. If `ptr` is
+///    `nullptr`, behaves like `m61_malloc(sz, file, line)`. If `sz` is 0,
+///    behaves like `m61_free(ptr, file, line)`. The allocation request
+///    was at location `file`:`line`.
+
+void* m61_realloc(void* ptr, size_t sz, const char* file, long line) {
+    if (ptr == NULL) {
+        return m61_malloc(sz, file, line);
+    }
+    if (metadata_map.find((uintptr_t) ptr) == metadata_map.end()) {
+        fprintf(stderr, "MEMORY BUG: %s:%ld: invalid realloc of pointer %p, pointer wasn't allocated yet\n", file, line, ptr);
+        abort();
+    }
+    if (sz == 0) {
+        m61_free(ptr, file, line);
+        return nullptr;
+    }
+    if (sz < metadata_map[(uintptr_t) ptr].size) {
+        fprintf(stderr, "MEMORY BUG: %s:%ld: invalid realloc of pointer %p, memory block of size %ld cannot be reallocated to %ld bytes\n", file, line, ptr, metadata_map[(uintptr_t) ptr].size, sz);
+        abort();
+    }
+    void* realloc_ptr = m61_malloc(sz, file, line);
+    memcpy(realloc_ptr, ptr, sz);
+    m61_free(ptr, file, line);
+    return realloc_ptr;
 }
 
 

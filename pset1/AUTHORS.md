@@ -14,4 +14,6 @@ Collaborators
 
 Citations
 ---------
-(List any other sources consulted.)
+- For using a list: https://www.cplusplus.com/reference/list/list/
+- For using an unordered map: https://www.cplusplus.com/reference/unordered_map/unordered_map/
+- For sorting a map by value: https://www.geeksforgeeks.org/sorting-a-map-by-value-in-c-stl/
