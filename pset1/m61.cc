@@ -37,9 +37,10 @@ struct metadata {
 // Initialize stats, metadata map, and heavy hitters
 struct m61_statistics _stats {0, 0, 0, 0, 0, 0, 0, 0};
 unordered_map<uintptr_t, metadata> metadata_map;
-unordered_map<string, size_t> heavy_hitters;
+unordered_map<string, pair<size_t, size_t>> heavy_hitters;
 list<uintptr_t> frees;
 size_t hh_size = 0;
+size_t hh_total = 0;
 
 
 /// m61_malloc(sz, file, line)
@@ -86,13 +87,16 @@ void* m61_malloc(size_t sz, const char* file, long line) {
     string hh = file;
     hh.append(":");
     hh.append(to_string(line));
-    if (rand() % 100 < 5) {
+    if (rand() % 100 < 10) {
         if (heavy_hitters.find(hh) != heavy_hitters.end()) {
-            heavy_hitters[hh] += sz;
+            size_t temp_size = heavy_hitters[hh].first;
+            size_t temp_count = heavy_hitters[hh].second;
+            heavy_hitters[hh] = make_pair(temp_size + sz, temp_count + 1);
         } else {
-            heavy_hitters[hh] = sz;
+            heavy_hitters[hh] = make_pair(sz, 1);
         }
-        hh_size += sz;
+        hh_size += sz;  // update total size
+        hh_total += 1;  // update total number
     }
 
     return ptr;
@@ -250,27 +254,41 @@ void m61_print_leak_report() {
 }
 
 
-/// hh_cmp()
-///    Helper function to compare sizes of heavy hitters
-bool hh_cmp(pair<string, size_t> &a, pair<string, size_t> &b) {
-    return a.second > b.second;
+/// hh_size_cmp()
+///    Helper function to compare heavy hitter sizes
+bool hh_size_cmp(pair<string, pair<size_t, size_t>> &a, pair<string, pair<size_t, size_t>> &b) {
+    return a.second.first > b.second.first;
 }
 
+/// hh_freq_cmp()
+///    Helper function to compare heavy hitter frequencies
+bool hh_freq_cmp(pair<string, pair<size_t, size_t>> &a, pair<string, pair<size_t, size_t>> &b) {
+    return a.second.second > b.second.second;
+}
 
 /// m61_print_heavy_hitter_report()
 ///    Print a report of heavily-used allocation locations.
 
 void m61_print_heavy_hitter_report() {
-    // Your heavy-hitters code here
-    vector<pair<string, size_t>> hh_vector;
+    vector<pair<string, pair<size_t, size_t> > > hh_vector;
     for (auto it : heavy_hitters) {
-        hh_vector.push_back(it);
+        pair<string, pair<size_t, size_t>> hh = make_pair(it.first, make_pair(it.second.first, it.second.second));
+        hh_vector.push_back(hh);
     }
-    sort(hh_vector.begin(), hh_vector.end(), hh_cmp);
+    sort(hh_vector.begin(), hh_vector.end(), hh_size_cmp);
+    printf("-----by heaviness-----\n");
     for (auto it = hh_vector.begin(); it != hh_vector.end(); it++) {
-        double percentage = (double) it->second / hh_size * 100;
+        double percentage = (double) it->second.first / hh_size * 100;
         if (percentage >= 20) {
-            printf("HEAVY HITTER: %s: %lu bytes (~%.1f%%)\n", it->first.substr(2).c_str(), it->second, percentage);
+            printf("HEAVY HITTER: %s: %lu bytes (~%.1f%%)\n", it->first.substr(2).c_str(), it->second.first, percentage);
+        }
+    }
+    sort(hh_vector.begin(), hh_vector.end(), hh_freq_cmp);
+    printf("-----by frequency-----\n");
+    for (auto it = hh_vector.begin(); it != hh_vector.end(); it++) {
+        double percentage = (double) it->second.second / hh_total * 100;
+        if (percentage >= 20) {
+            printf("HEAVY HITTER: %s: %lu allocations (~%.1f%%)\n", it->first.substr(2).c_str(), it->second.second, percentage);
         }
     }
 }

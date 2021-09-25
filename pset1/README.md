@@ -13,5 +13,4 @@ I tracked metadata externally using a hashmap. To bound the metadata from growin
 
 Extra credit attempted (if any)
 -------------------------------
-I implemented m61_realloc().
-I also added 3 tests testing m61_realloc.
+I implemented `61_realloc()` and added 3 tests testing m61_realloc. I also made `m61_print_heavy_hitter_report()` print out both frequent and heavy heavy-hitters.
