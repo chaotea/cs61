@@ -13,6 +13,7 @@
 #include <random>
 #include <deque>
 #include <functional>
+#include <random>
 
 
 // breakout board
@@ -68,24 +69,27 @@ void ball_thread(pong_ball* b) {
 //    and it doesn’t work at all!
 
 void warp_thread(pong_warp* w) {
-    pong_cell& cdest = w->board.cell(w->x, w->y);
     while (true) {
         // wait for a ball to arrive
-        while (!w->ball) {
-            usleep(0);
+        w->queue_mutex.lock();
+        while (w->q.empty()) {
+            w->cv.wait(w->queue_mutex);
         }
-        pong_ball* b = w->ball;
-        w->ball = nullptr;
+        pong_ball* b = w->q.front();
+        w->q.pop_front();
+        w->queue_mutex.unlock();
 
         // ball stays in the warp tunnel for `warp_delay` usec
         usleep(warp_delay);
 
-        // then it appears on the destination cell
-        assert(!cdest.ball);
-        cdest.ball = b;
-        b->x = w->x;
-        b->y = w->y;
-        b->stopped = false;
+        // then mark the ball as ready to unwarp the ball
+        // and notify the ball thread
+        w->board.column_mutex[b->x+1].lock();
+        b->wx = w->x;
+        b->wy = w->y;
+        b->unwarp = true;
+        w->board.column_mutex[b->x+1].unlock();
+        b->stopped_cv.notify_all();
     }
 }
 
@@ -98,13 +102,52 @@ void warp_thread(pong_warp* w) {
 //    forth.
 
 void paddle_thread(pong_board* b, int px, int py, int pw) {
-    int dx = 1;
     while (true) {
+        // calculate the direction to move:
+        // 1. count the # of balls up to 3 cells away
+        // 2. move towards the side with more balls
+        int left = 0;
+        int right = 0;
+        int mid = (px + pw) / 2;
+
+        // count the balls to the left of the paddle midpoint
+        for (int i = px - 3; i < mid; ++i) {
+            if (i < 0) {
+                continue;
+            }
+            if (b->cell(i, py - 1).ball) ++left;
+            if (b->cell(i, py - 2).ball) ++left;
+            if (b->cell(i, py - 3).ball) ++left;
+        }
+
+        // count the balls to the right of the paddle midpoint
+        for (int i = mid; i < px + pw + 3; ++i) {
+            if (i >= b->width) {
+                break;
+            }
+            if (b->cell(i, py - 1).ball) ++right;
+            if (b->cell(i, py - 2).ball) ++right;
+            if (b->cell(i, py - 3).ball) ++right;
+        }
+
+        // move towards the side with more balls
+        int dx = 0;
+        if (left < right) {
+            dx = 1;
+        } else if (left > right) {
+            dx = -1;
+        } else {
+            // if the counts are equal, randomly choose a direction
+            if (rand() % 2 == 1) {
+                dx = 1;
+            } else {
+                dx = -1;
+            }
+        }
+
+        // don't go out of bounds
         if (px + dx >= 0 && px + dx + pw <= b->width) {
             px += dx;
-        } else {
-            // hit edge of screen; reverse
-            dx = -dx;
         }
 
         // represent paddle position as cell_paddle vs. cell_empty

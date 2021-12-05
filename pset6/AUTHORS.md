@@ -3,15 +3,15 @@ Author and collaborators
 
 Primary student
 ---------------
-(Your name.)
+Chao Cheng
 
 
 Collaborators
 -------------
-(List any other collaborators and describe help you got from other students
-in the class.)
+Cassie Wang
+Helen Cho
 
 
 Citations
 ---------
-(List any other sources consulted.)
+- Section 12 notes

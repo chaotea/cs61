@@ -2,6 +2,7 @@
 #define PONGBOARD_HH
 #include <cassert>
 #include <vector>
+#include <deque>
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
@@ -47,6 +48,8 @@ struct pong_board {
     pong_cell obstacle_cell;          // represents off-board positions
     unsigned long ncollisions = 0;
 
+    std::mutex* column_mutex;  // array of mutexes for each column (including the boundaries)
+    std::mutex collision_mutex;  // mutex for collisions
 
     pong_board(int w, int h);
     ~pong_board();
@@ -74,11 +77,14 @@ struct pong_board {
 struct pong_ball {
     pong_board& board;
     bool stopped = false;
+    bool unwarp = false;  // if true, unwarp the ball in move()
     int x = 0;
     int y = 0;
     int dx = 1;
     int dy = 1;
-
+    int wx = -1;  // the x position of the warp tunnel exit
+    int wy = -1;  // the y position of the warp tunnel exit
+    std::condition_variable_any stopped_cv;  // cv for stopped balls
 
     // pong_ball(board)
     //    Construct a new ball on `board`.
@@ -102,8 +108,9 @@ struct pong_warp {
     pong_board& board;
     int x;
     int y;
-    pong_ball* ball = nullptr;
-
+    std::deque<pong_ball*> q;  // queue for storing balls that have entered the warp
+    std::mutex queue_mutex;  // mutex for the queue
+    std::condition_variable_any cv;  // cv for the queue
 
     pong_warp(pong_board& board_)
         : board(board_) {
