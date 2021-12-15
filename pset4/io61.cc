@@ -3,9 +3,8 @@
 #include <sys/stat.h>
 #include <climits>
 #include <cerrno>
+#include <algorithm>
 
-#define FORWARD 0
-#define REVERSE 1
 
 // io61.cc
 //    YOUR CODE HERE!
@@ -16,12 +15,12 @@
 
 struct io61_file {
     int fd;
+    int mode;
     static constexpr off_t bufsize = 4096;
     unsigned char cbuf[bufsize];
     off_t tag;
     off_t end_tag;
     off_t pos_tag;
-    int dir;  // read direction
 };
 
 
@@ -34,7 +33,7 @@ io61_file* io61_fdopen(int fd, int mode) {
     assert(fd >= 0);
     io61_file* f = new io61_file;
     f->fd = fd;
-    (void) mode;
+    f->mode = mode;
     return f;
 }
 
@@ -53,32 +52,18 @@ int io61_close(io61_file* f) {
 // io61_fill(f)
 //    Fill the read cache
 
-int io61_fill(io61_file* f, int dir) {
-    // Update the file descriptor offset and reset the cache
-    lseek(f->fd, f->pos_tag, SEEK_SET);
-    f->tag = f->end_tag = f->pos_tag;
+int io61_fill(io61_file* f) {
+    // Reset the cache
+    f->tag = f->pos_tag = f->end_tag;
 
-    ssize_t n = -1;
-    if (dir == REVERSE && f->pos_tag >= f->bufsize) {
-        // If reverse-sequential access, fill in reverse
-        // i.e. cache the previous (bufsize) characters
-        lseek(f->fd, -f->bufsize + 1, SEEK_CUR);
-        n = read(f->fd, f->cbuf, f->bufsize);
-        if (n >= 0) {
-            f->tag = f->end_tag - n + 1;
-        } else {
-            return -1;
-        }
+    // Fill the cache with up to (bufsize) characters
+    int n = read(f->fd, f->cbuf, f->bufsize);
+    if (n >= 0) {
+        f->end_tag = f->tag + n;
+        return n;
     } else {
-        // Otherwise, cache the next (bufsize) characters
-        n = read(f->fd, f->cbuf, f->bufsize);
-        if (n >= 0) {
-            f->end_tag = f->tag + n;
-        } else {
-            return -1;
-        }
+        return -1;
     }
-    return n;
 }
 
 
@@ -94,28 +79,18 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
     while (pos < sz) {
         // Refill the cache if pos_tag reaches the end or is out of bounds
         if (f->pos_tag >= f->end_tag || f->pos_tag < f->tag) {
-            ssize_t n = io61_fill(f, FORWARD);
-            if (f->pos_tag == f->end_tag) {
+            int n = io61_fill(f);
+            if (n == 0) {
                 break;
             } else if (n == -1) {
                 return -1;
             }
         }
-
-        size_t read_sz = 0;
-        if (sz - pos <= (size_t) f->end_tag - f->pos_tag) {
-            // If we can read all the remaining characters at once, then do it
-            read_sz = sz - pos;
-            memcpy(&buf[pos], &f->cbuf[f->pos_tag - f->tag], read_sz);
-        } else {
-            // Otherwise, read as much as possible until the cache is full
-            read_sz = f->end_tag - f->pos_tag;
-            memcpy(&buf[pos], &f->cbuf[f->pos_tag - f->tag], read_sz);
-        }
-
-        // Update the position
-        f->pos_tag += read_sz;
-        pos += read_sz;
+        // Read as many characters as possible until we reach the end of the cache or hit sz
+        size_t read = std::min(sz - pos, (size_t) (f->end_tag - f->pos_tag));
+        memcpy(&buf[pos], &f->cbuf[f->pos_tag - f->tag], read);
+        f->pos_tag += read;
+        pos += read;
     }
     return pos;
 }
@@ -127,15 +102,8 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
 int io61_readc(io61_file* f) {
     // Refill the cache if pos_tag reaches the limit or is out of bounds
-    // if reading forward, the limit is the end;
-    // if reading in reverse, the limit is one before the start.
-    if (
-        (f->pos_tag == f->end_tag && f->dir == FORWARD) ||
-        (f->pos_tag == f->tag - 1 && f->dir == REVERSE) ||
-        (f->pos_tag < f->tag || f->pos_tag > f->end_tag)
-        )
-    {
-        ssize_t n = io61_fill(f, f->dir);
+    if (f->pos_tag >= f->end_tag || f->pos_tag < f->tag) {
+        int n = io61_fill(f);
         if (n <= 0) {
             // If there was an error or we reached EOF, return -1
             return -1;
@@ -155,32 +123,25 @@ int io61_readc(io61_file* f) {
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     // If pos_tag is out of bounds, reset the cache
-    if (f->pos_tag < f-> tag || f->pos_tag > f->end_tag) {
+    if (f->pos_tag < f->tag || f->pos_tag > f->tag + f->bufsize) {
         f->tag = f->end_tag = f->pos_tag;
     }
 
     size_t pos = 0;
     while (pos < sz) {
-        size_t write_sz = 0;
-        if (sz - pos <= (size_t) f->bufsize - (f->pos_tag - f->tag)) {
-            // If we can write all the remaining characters at once, then do it
-            write_sz = sz - pos;
-            memcpy(&f->cbuf[f->pos_tag - f->tag], &buf[pos], write_sz);
-        } else {
-            // Otherwise, write as much as possible until the cache is full
-            write_sz = f->bufsize - (f->pos_tag - f->tag);
-            memcpy(&f->cbuf[f->pos_tag - f->tag], &buf[pos], write_sz);
-        }
-
-        // Update the position
-        f->pos_tag += write_sz;
-        f->end_tag += write_sz;
-        pos += write_sz;
-
-        // If the cache is full, flush it
+        // Flush the cache if it is full
         if (f->end_tag == f->tag + f->bufsize) {
-            io61_flush(f);
+            int n = io61_flush(f);
+            if (n < 0) {
+                return -1;
+            }
         }
+        // Write as many characters as possible until we reach the end of the cache or hit sz
+        size_t write = std::min(sz - pos, (size_t) (f->bufsize - (f->end_tag - f->tag)));
+        memcpy(&f->cbuf[f->pos_tag - f->tag], &buf[pos], write);
+        f->pos_tag += write;
+        f->end_tag += write;
+        pos += write;
     }
     return pos;
 }
@@ -191,18 +152,21 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 //    -1 on error.
 
 int io61_writec(io61_file* f, int ch) {
-    // If the cache is full, flush it
+    // Flush the cache if it is full
     if (f->end_tag == f->tag + f->bufsize) {
-        io61_flush(f);
+        int n = io61_flush(f);
+        if (n < 0) {
+            return -1;
+        }
     }
+
+    // If pos_tag is within bounds, cache the character
     if (f->pos_tag >= f->tag && f->pos_tag <= f->tag + f->bufsize) {
-        // If pos_tag is within bounds, cache the character
         f->cbuf[f->end_tag - f->tag] = ch;
         f->pos_tag++;
         f->end_tag++;
         return 0;
     } else {
-        // Otherwise, return an error
         return -1;
     }
 }
@@ -215,13 +179,13 @@ int io61_writec(io61_file* f, int ch) {
 
 int io61_flush(io61_file* f) {
     // Write the contents of the cache
-    ssize_t n = write(f->fd, f->cbuf, f->pos_tag - f->tag);
-    if (n == f->pos_tag - f-> tag) {
-        // If the write is successful, reset the cache
-        f->tag = f->pos_tag;
-        return 0;
+    int n = write(f->fd, f->cbuf, f->end_tag - f->tag);
+
+    // Reset the cache
+    if (n == f->end_tag - f->tag) {
+        f->tag = f->pos_tag = f->end_tag;
+        return n;
     } else {
-        // Otherwise, return an error
         return -1;
     }
 }
@@ -232,19 +196,39 @@ int io61_flush(io61_file* f) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t pos) {
-    // Update the file descriptor offset
-    off_t r = lseek(f->fd, pos, SEEK_SET);
-    if (r == pos) {
-        // If successful, update pos_tag and check if
-        // the file is being read reverse-sequentially
-        f->pos_tag = r;
-        if (f->pos_tag > f->end_tag) {
-            f->dir = REVERSE;
+    // If the file is write-only, flush the cache and lseek to the new position
+    if (f->mode == O_WRONLY) {
+        int n = io61_flush(f);
+        if (n < 0) {
+            return -1;
         }
+        off_t r = lseek(f->fd, pos, SEEK_SET);
+        if (r == pos) {
+            return 0;
+        } else {
+            return -1;
+        }
+    }
+
+    // If the new position is already in the cache, update the pos_tag
+    if (pos >= f->tag && pos < f->end_tag) {
+        f->pos_tag = pos;
         return 0;
     } else {
-        // Otherwise, return failure
-        return -1;
+        // Otherwise, lseek to the nearest multiple of (bufsize) and fill the cache
+        off_t aligned_pos = (pos / f->bufsize) * f->bufsize;
+        off_t r = lseek(f->fd, aligned_pos, SEEK_SET);
+        if (r == aligned_pos) {
+            f->end_tag = aligned_pos;
+            ssize_t n = io61_fill(f);
+            if (n < 0) {
+                return -1;
+            }
+            f->pos_tag = pos;
+            return 0;
+        } else {
+            return -1;
+        }
     }
 }
 
